@@ -21,3 +21,8 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 HEADERS += \
     mainserver.h \
     websocketconnection.h
+
+win32: LIBS += -L$$PWD/thirdparty/ffmpeg/lib/ -lavcodec -lavformat -lavutil -lswscale -lavdevice
+
+INCLUDEPATH += $$PWD/thirdparty/ffmpeg/include
+DEPENDPATH += $$PWD/thirdparty/ffmpeg/include

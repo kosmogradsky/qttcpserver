@@ -15,7 +15,8 @@ void MainServer::handleNewConnection() {
     WebsocketConnection *websocketConnection = new WebsocketConnection(tcpClient);
 
     connect(tcpClient, &QAbstractSocket::disconnected,
-            websocketConnection, &QObject::deleteLater);
+            websocketConnection, [](){ qDebug() << "client disconnected"; });
+    // &QObject::deleteLater
 }
 
 void MainServer::listen() {

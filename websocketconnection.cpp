@@ -1,5 +1,11 @@
 #include "websocketconnection.h"
 
+static const char* av_make_error(int errnum) {
+    static char str[AV_ERROR_MAX_STRING_SIZE];
+    memset(str, 0, sizeof(str));
+    return av_make_error_string(str, AV_ERROR_MAX_STRING_SIZE, errnum);
+}
+
 WebsocketConnection::WebsocketConnection(
     QTcpSocket *tcpSocket,
     QObject *parent
@@ -12,6 +18,20 @@ WebsocketConnection::WebsocketConnection(
 
     connect(tcpClient, &QTcpSocket::readyRead,
             this, &WebsocketConnection::handleRead);
+
+    const AVCodec *avCodec = avcodec_find_decoder(AVCodecID::AV_CODEC_ID_H264);
+    avCodecCtx = avcodec_alloc_context3(avCodec);
+
+    avCodecCtx->width = 640;
+    avCodecCtx->height = 480;
+    avCodecCtx->bit_rate = 2000000;
+
+    AVRational framerate;
+    framerate.num = 30;
+    framerate.den = 1;
+    avCodecCtx->framerate = framerate;
+
+    avcodec_open2(avCodecCtx, avCodec, NULL);
 }
 
 void WebsocketConnection::handleRead()
@@ -30,22 +50,65 @@ void WebsocketConnection::handleWebsocketMessage()
     bool isMasked = messageBytes.at(1) & 0b10000000;
     quint64 payloadLength;
 
-    unsigned char shortPayloadLength = messageBytes.at(1) & 0b01111111;
-    if (shortPayloadLength == 126) {
-        payloadLength = messageBytes.sliced(2, 2).toUInt();
-    } else if (shortPayloadLength == 127) {
-        payloadLength = messageBytes.sliced(2, 8).toULongLong();
-    } else {
+    unsigned char charPayloadLength = messageBytes.at(1) & 0b01111111;
+    unsigned char maskingKeyStart = 2;
+    if (charPayloadLength == 126) {
+        QDataStream lengthStream(messageBytes.sliced(2, 2));
+        unsigned short shortPayloadLength;
+
+        lengthStream >> shortPayloadLength;
         payloadLength = shortPayloadLength;
+        maskingKeyStart += 2;
+    } else if (charPayloadLength == 127) {
+        payloadLength = messageBytes.sliced(2, 8).toULongLong();
+        maskingKeyStart += 8;
+    } else {
+        payloadLength = charPayloadLength;
     }
 
+    qDebug() << "byte array length " << messageBytes.size();
     qDebug() << "opcode " << opcode;
     qDebug() << "isMasked " << isMasked;
     qDebug() << "payload length " << payloadLength;
 
     QString payloadData;
     if (isMasked) {
+        const QByteArray maskingKey = messageBytes.sliced(maskingKeyStart, 4);
+        const QByteArray maskedPayload = messageBytes.sliced(maskingKeyStart + 4, payloadLength);
+        char j;
+        QByteArray unmaskedPayload;
 
+        qDebug() << "masked payload " << maskedPayload;
+
+        for (qsizetype i = 0; i < maskedPayload.size(); ++i) {
+            j = i % 4;
+            unmaskedPayload.append(maskedPayload.at(i) ^ maskingKey.at(j));
+        }
+
+        payloadData = QString(unmaskedPayload);
+
+        qDebug() << "unmasked payload " << unmaskedPayload;
+        qDebug() << "payload data " << payloadData;
+
+        QDataStream unmaskedPayloadStream(unmaskedPayload);
+        int packetSize = unmaskedPayload.size();
+        char *packetRawData = (char *) av_malloc(packetSize);
+        char *incPacketRawData = packetRawData + 5;
+
+        unmaskedPayloadStream.readRawData(packetRawData, packetSize);
+
+        AVPacket *avPacket = av_packet_alloc();
+        AVFrame *avFrame = av_frame_alloc();
+
+        av_packet_from_data(avPacket, (uint8_t*) packetRawData, packetSize);
+        char sendPacketResponse = avcodec_send_packet(avCodecCtx, avPacket);
+        const char *sendPacketError = av_make_error(sendPacketResponse);
+        char receiveFrameResponse = avcodec_receive_frame(avCodecCtx, avFrame);
+        const char *receiveFrameError = av_make_error(receiveFrameResponse);
+
+        qDebug() << "hello";
+    } else {
+        // error
     }
 }
 
